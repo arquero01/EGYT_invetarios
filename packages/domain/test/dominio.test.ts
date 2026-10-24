@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accionesPermitidas,
+  evaluarMovimientoEquipo,
   digitoVerificacionNit,
   esFechaFutura,
   esFechaValida,
@@ -75,5 +76,52 @@ describe('utilidades', () => {
   it('normaliza seriales y búsquedas', () => {
     expect(normalizarSerial(' jk 2024 001 ')).toBe('JK2024001');
     expect(normalizarBusqueda('  María LÓPEZ ')).toBe('maria lopez');
+  });
+});
+
+describe('ubicaciones (RL-02)', () => {
+  const bodegaA = crypto.randomUUID();
+  const bodegaB = crypto.randomUUID();
+  const proyecto = crypto.randomUUID();
+  const enBodegaA = { estado: 'EN_STOCK' as const, ubicacion: 'BODEGA' as const, bodegaId: bodegaA, proyectoId: proyecto };
+
+  it('despacha solo desde la bodega donde está el equipo', () => {
+    expect(evaluarMovimientoEquipo(enBodegaA, { tipo: 'DESPACHO', bodegaOrigenId: bodegaA })).toEqual({ ok: true, ubicacion: 'CAMPO', bodegaId: null });
+
+    const r = evaluarMovimientoEquipo(enBodegaA, { tipo: 'DESPACHO', bodegaOrigenId: bodegaB });
+    if (!r.ok) expect(r.error.codigo).toBe('RL-02');
+    else throw new Error('debía fallar');
+  });
+
+  it('no despacha equipos en mantenimiento', () => {
+    const enMantenimiento = { ...enBodegaA, estado: 'EN_MANTENIMIENTO' as const };
+    expect(evaluarMovimientoEquipo(enMantenimiento, { tipo: 'DESPACHO', bodegaOrigenId: bodegaA }).ok).toBe(false);
+  });
+
+  it('traslada equipos en mantenimiento, pero no instalados', () => {
+    const enMantenimiento = { ...enBodegaA, estado: 'EN_MANTENIMIENTO' as const };
+    expect(evaluarMovimientoEquipo(enMantenimiento, { tipo: 'TRASLADO', bodegaOrigenId: bodegaA, bodegaDestinoId: bodegaB }))
+      .toEqual({ ok: true, ubicacion: 'BODEGA', bodegaId: bodegaB });
+
+    const instalado = { ...enBodegaA, estado: 'INSTALADO' as const, ubicacion: 'CAMPO' as const, bodegaId: null };
+    expect(evaluarMovimientoEquipo(instalado, { tipo: 'TRASLADO', bodegaOrigenId: bodegaA, bodegaDestinoId: bodegaB }).ok).toBe(false);
+  });
+
+  it('devuelve desde campo solo si no está instalado y es del proyecto', () => {
+    const enCampo = { ...enBodegaA, ubicacion: 'CAMPO' as const, bodegaId: null };
+    expect(evaluarMovimientoEquipo(enCampo, { tipo: 'DEVOLUCION', proyectoId: proyecto, bodegaDestinoId: bodegaB }))
+      .toEqual({ ok: true, ubicacion: 'BODEGA', bodegaId: bodegaB });
+
+    const otroProyecto = crypto.randomUUID();
+    expect(evaluarMovimientoEquipo(enCampo, { tipo: 'DEVOLUCION', proyectoId: otroProyecto, bodegaDestinoId: bodegaB }).ok).toBe(false);
+
+    const instalado = { ...enCampo, estado: 'INSTALADO' as const };
+    expect(evaluarMovimientoEquipo(instalado, { tipo: 'DEVOLUCION', proyectoId: proyecto, bodegaDestinoId: bodegaB }).ok).toBe(false);
+  });
+
+  it('un equipo dado de baja no se mueve', () => {
+    const r = evaluarMovimientoEquipo({ ...enBodegaA, estado: 'DADO_DE_BAJA' }, { tipo: 'TRASLADO', bodegaOrigenId: bodegaA, bodegaDestinoId: bodegaB });
+    if (!r.ok) expect(r.error.codigo).toBe('RF-15');
+    else throw new Error('debía fallar');
   });
 });

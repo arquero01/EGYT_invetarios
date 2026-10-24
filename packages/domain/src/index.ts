@@ -3,3 +3,4 @@ export * from './mensajes.ts';
 export * from './errores.ts';
 export * from './utilidades.ts';
 export * from './estados.ts';
+export * from './ubicaciones.ts';
