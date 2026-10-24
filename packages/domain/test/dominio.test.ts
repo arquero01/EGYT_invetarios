@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   accionesPermitidas,
+  crearProyecto,
+  instalarEquipo,
+  registrarIngreso,
+  retirarEquipo,
   evaluarMovimientoEquipo,
   digitoVerificacionNit,
   esFechaFutura,
@@ -123,5 +127,96 @@ describe('ubicaciones (RL-02)', () => {
     const r = evaluarMovimientoEquipo({ ...enBodegaA, estado: 'DADO_DE_BAJA' }, { tipo: 'TRASLADO', bodegaOrigenId: bodegaA, bodegaDestinoId: bodegaB });
     if (!r.ok) expect(r.error.codigo).toBe('RF-15');
     else throw new Error('debía fallar');
+  });
+});
+
+// ── Formularios (comandos.ts, parte 1) ──────────────────────────────────────
+
+const ingresoValido = () => ({
+  equipoId: crypto.randomUUID(),
+  tipo: 'PANEL_SOLAR',
+  marca: 'Jinko',
+  modelo: 'Tiger Neo 450',
+  origenSerial: 'PROVEEDOR',
+  serial: 'JK2024001234',
+  potencia: 450,
+  unidad: 'W',
+  proyectoId: crypto.randomUUID(),
+  bodegaId: crypto.randomUUID(),
+  compra: { proveedor: 'Solartex SAS', nit: '800197268-4', numeroFactura: 'FE-1001', fechaCompra: '2026-01-10' },
+  valorPagado: 520000,
+});
+
+/** Devuelve los campos con error (lista vacía si el formulario es válido). */
+const camposConError = (resultado: { success: boolean; error?: { issues: { path: PropertyKey[] }[] } }) =>
+  resultado.success ? [] : resultado.error!.issues.map((i) => i.path.join('.'));
+
+describe('formularios: proyectos e ingreso', () => {
+  it('acepta un proyecto válido y rechaza fecha futura (RF-01)', () => {
+    const proyecto = {
+      proyectoId: crypto.randomUUID(),
+      nombre: 'Electrificación La Esperanza',
+      vereda: 'La Esperanza',
+      municipio: 'Buenos Aires',
+      departamento: 'Cauca',
+      fechaInicio: '2026-02-01',
+    };
+    expect(crearProyecto.safeParse(proyecto).success).toBe(true);
+    expect(camposConError(crearProyecto.safeParse({ ...proyecto, fechaInicio: '2999-01-01' }))).toEqual(['fechaInicio']);
+    expect(camposConError(crearProyecto.safeParse({ ...proyecto, vereda: '   ' }))).toEqual(['vereda']);
+  });
+
+  it('acepta un ingreso válido (RF-06)', () => {
+    expect(registrarIngreso.safeParse(ingresoValido()).success).toBe(true);
+  });
+
+  it('rechaza potencia cero y NIT con dígito de verificación incorrecto', () => {
+    expect(camposConError(registrarIngreso.safeParse({ ...ingresoValido(), potencia: 0 }))).toEqual(['potencia']);
+
+    const compraMala = { ...ingresoValido().compra, nit: '800197268-9' };
+    expect(camposConError(registrarIngreso.safeParse({ ...ingresoValido(), compra: compraMala }))).toEqual(['compra.nit']);
+  });
+
+  it('exige serial si viene del proveedor y lo prohíbe si lo asigna la empresa', () => {
+    const { serial: _sinSerial, ...sinSerial } = ingresoValido();
+    expect(camposConError(registrarIngreso.safeParse(sinSerial))).toEqual(['serial']);
+
+    expect(camposConError(registrarIngreso.safeParse({ ...ingresoValido(), origenSerial: 'EMPRESA' }))).toEqual(['serial']);
+    expect(registrarIngreso.safeParse({ ...sinSerial, origenSerial: 'EMPRESA' }).success).toBe(true);
+  });
+
+  it('reserva el prefijo EGT- para la empresa', () => {
+    expect(camposConError(registrarIngreso.safeParse({ ...ingresoValido(), serial: 'egt-pan-000001' }))).toEqual(['serial']);
+  });
+});
+
+describe('formularios: instalación y retiro', () => {
+  const instalacion = () => ({
+    equipoId: crypto.randomUUID(),
+    instalacionId: crypto.randomUUID(),
+    usuario: { nombre: 'María López', cedula: 1234567890, telefono: '310 555 1234' },
+    ubicacion: { vereda: 'La Esperanza', municipio: 'Buenos Aires', departamento: 'Cauca' },
+    fechaInstalacion: '2026-01-15',
+    tecnico: 'Carlos Pérez',
+  });
+
+  it('acepta cédula y teléfono como número o texto, y los limpia (RF-11)', () => {
+    const r = instalarEquipo.safeParse(instalacion());
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.usuario.cedula).toBe('1234567890');
+      expect(r.data.usuario.telefono).toBe('3105551234');
+    }
+  });
+
+  it('rechaza un teléfono incompleto', () => {
+    const datos = instalacion();
+    datos.usuario.telefono = '310555';
+    expect(camposConError(instalarEquipo.safeParse(datos))).toEqual(['usuario.telefono']);
+  });
+
+  it('exige motivo de al menos 10 caracteres al retirar (RF-13)', () => {
+    expect(camposConError(retirarEquipo.safeParse({ equipoId: crypto.randomUUID(), motivo: 'corto' }))).toEqual(['motivo']);
+    expect(retirarEquipo.safeParse({ equipoId: crypto.randomUUID(), motivo: 'El usuario se mudó de vereda' }).success).toBe(true);
   });
 });
